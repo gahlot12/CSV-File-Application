@@ -12,37 +12,28 @@ import json
 import requests
 from pydantic import BaseModel, Field
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, 
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Create a temporary directory to store uploaded files
 temp_dir = tempfile.mkdtemp()
 UPLOAD_FOLDER = temp_dir
 
-# Install Ollama in Colab (this won't affect anything if you're not in Colab)
 try:
     import google.colab
-    # We're in Colab, install Ollama
     !curl -fsSL https://ollama.com/install.sh | sh
     !ollama pull llama3.1:8b-q4_0
 except:
-    # Not in Colab, continue normally
     pass
 
-# Configure Ollama client - we'll use the REST API instead of a Python package
 OLLAMA_BASE_URL = "http://localhost:11434/api"
 
 class OllamaClient:
-    """Simple client for Ollama API"""
-    
     def __init__(self, base_url=OLLAMA_BASE_URL, model="llama3.1:8b-q4_0"):
         self.base_url = base_url
         self.model = model
     
     def generate(self, prompt, system_prompt=None):
-        """Generate text from Ollama API"""
         data = {
             "model": self.model,
             "prompt": prompt,
@@ -60,12 +51,9 @@ class OllamaClient:
             logger.error(f"Error calling Ollama API: {str(e)}")
             return f"Error: {str(e)}"
 
-# Initialize Ollama client
 ollama = OllamaClient()
 
 class DataFrameInfo:
-    """Class to store and manage the uploaded DataFrame"""
-    
     def __init__(self):
         self.df = None
         self.file_path = None
@@ -73,7 +61,6 @@ class DataFrameInfo:
         self.file_info = {}
     
     def load_df(self, file_path):
-        """Load DataFrame from CSV file"""
         try:
             self.df = pd.read_csv(file_path)
             self.file_path = file_path
@@ -85,9 +72,7 @@ class DataFrameInfo:
             return False
     
     def update_column_info(self):
-        """Update column information"""
         if self.df is not None:
-            # Get column types and basic stats
             self.column_info = {}
             for col in self.df.columns:
                 dtype = str(self.df[col].dtype)
@@ -104,7 +89,6 @@ class DataFrameInfo:
                         "null_count": int(self.df[col].isna().sum())
                     }
                 else:
-                    # For non-numeric columns
                     unique_values = self.df[col].nunique()
                     most_common = self.df[col].value_counts().nlargest(3).to_dict()
                     most_common = {str(k): int(v) for k, v in most_common.items()}
@@ -121,7 +105,6 @@ class DataFrameInfo:
                 }
     
     def update_file_info(self):
-        """Update file metadata"""
         if self.df is not None:
             self.file_info = {
                 "rows": len(self.df),
@@ -132,12 +115,9 @@ class DataFrameInfo:
                 "file_name": os.path.basename(self.file_path) if self.file_path else None
             }
 
-# Initialize DataFrame info storage
 df_info = DataFrameInfo()
 
-# Define Pydantic models for structured data
 class AnswerResponse(BaseModel):
-    """Structured response to a user's question"""
     answer: str
     requires_visualization: bool = False
     suggested_visualization: Optional[str] = None
@@ -146,7 +126,6 @@ class AnswerResponse(BaseModel):
     code_to_execute: Optional[str] = None
 
 class ChartDescription(BaseModel):
-    """Describes a chart to be created"""
     chart_type: str
     x_column: str
     y_column: Optional[str] = None
@@ -157,17 +136,12 @@ class ChartDescription(BaseModel):
     additional_parameters: Dict[str, Any] = {}
 
 def answer_question(question):
-    """
-    Use Ollama to analyze the question and dataset to provide a comprehensive answer.
-    """
     if df_info.df is None:
         return AnswerResponse(answer="No dataset loaded. Please upload a CSV file first.")
     
-    # Convert column info and file info to JSON strings for the prompt
     column_info_str = json.dumps(df_info.column_info, indent=2)
     file_info_str = json.dumps(df_info.file_info, indent=2)
     
-    # Get sample data
     sample_data_str = df_info.df.head(5).to_string()
     
     system_prompt = """
@@ -204,21 +178,16 @@ def answer_question(question):
     If a visualization would be helpful, include the appropriate Plotly code in the "code_to_execute" field.
     """
     
-    # Get response from Ollama
     response_text = ollama.generate(user_prompt, system_prompt)
     
-    # Extract JSON from response
     try:
-        # Find JSON-like content in the response
         json_match = re.search(r'({[\s\S]*})', response_text)
         if json_match:
             json_str = json_match.group(1)
             response_dict = json.loads(json_str)
             
-            # Convert to Pydantic model
             return AnswerResponse(**response_dict)
         else:
-            # If no JSON found, create a basic response
             return AnswerResponse(
                 answer=f"Received response but couldn't parse it as JSON. Raw answer: {response_text}"
             )
@@ -229,9 +198,6 @@ def answer_question(question):
         )
 
 def create_visualization_code(chart_request):
-    """
-    Use Ollama to generate code for creating the requested visualization using Plotly.
-    """
     system_prompt = """
     You are a data visualization expert. 
     Your job is to create Python code using Plotly to visualize data based on the request.
@@ -254,29 +220,23 @@ def create_visualization_code(chart_request):
     Return only the Python code.
     """
     
-    # Get response from Ollama
     return ollama.generate(user_prompt, system_prompt)
 
-# Function to handle CSV upload
 def upload_file(file):
     if file is None:
         return None, "No file uploaded.", None
     
     try:
-        # Save the uploaded file
         file_path = os.path.join(UPLOAD_FOLDER, file.name)
         with open(file_path, "wb") as f:
             f.write(file.read())
         
-        # Load the DataFrame
         success = df_info.load_df(file_path)
         if not success:
             return None, "Failed to load CSV file. Please check the format.", None
         
-        # Generate preview
         preview = df_info.df.head(5).to_html(classes='table table-striped')
         
-        # Generate summary
         rows, cols = df_info.df.shape
         column_types = df_info.df.dtypes.to_dict()
         column_types = {k: str(v) for k, v in column_types.items()}
@@ -299,7 +259,6 @@ def upload_file(file):
         logger.error(f"Error in upload_file: {str(e)}")
         return None, f"Error processing file: {str(e)}", None
 
-# Function to process user questions
 def process_question(question, file_path):
     if file_path is None or df_info.df is None:
         return "Please upload a CSV file first.", None
@@ -308,22 +267,17 @@ def process_question(question, file_path):
         return "Please enter a question.", None
     
     try:
-        # Get response from LLM
         response = answer_question(question)
         
         fig = None
         if response.requires_visualization and response.code_to_execute:
             try:
-                # Create a local environment with the dataframe
                 local_env = {"df": df_info.df, "px": px, "go": go}
                 
-                # Execute the visualization code
                 exec(response.code_to_execute, local_env)
                 
-                # Get the figure from the local environment
                 fig = local_env.get('fig', None)
                 
-                # If no figure was created, add that to the response
                 if fig is None:
                     response.answer += "\n\nNote: A visualization was suggested, but couldn't be created."
             except Exception as viz_error:
@@ -336,7 +290,6 @@ def process_question(question, file_path):
         logger.error(f"Error in process_question: {str(e)}")
         return f"Error processing question: {str(e)}", None
 
-# Function to generate visualization based on user selections
 def generate_visualization(chart_type, x_column, y_column, color_column, title, file_path):
     if file_path is None or df_info.df is None:
         return "Please upload a CSV file first.", None
@@ -345,7 +298,6 @@ def generate_visualization(chart_type, x_column, y_column, color_column, title, 
         return "Please select at least X-axis column.", None
     
     try:
-        # Create chart request
         chart_request = ChartDescription(
             chart_type=chart_type,
             x_column=x_column,
@@ -354,17 +306,13 @@ def generate_visualization(chart_type, x_column, y_column, color_column, title, 
             title=title if title else f"{chart_type.capitalize()} of {x_column} vs {y_column}" 
         )
         
-        # Get visualization code from LLM
         code_snippet = create_visualization_code(chart_request)
         
         try:
-            # Create a local environment with the dataframe
             local_env = {"df": df_info.df, "px": px, "go": go}
             
-            # Execute the visualization code
             exec(code_snippet, local_env)
             
-            # Get the figure from the local environment
             fig = local_env.get('fig', None)
             
             if fig is None:
@@ -380,12 +328,10 @@ def generate_visualization(chart_type, x_column, y_column, color_column, title, 
         logger.error(f"Error in generate_visualization: {str(e)}")
         return f"Error generating visualization: {str(e)}", None
 
-# Create Gradio interface
 with gr.Blocks(title="CSV Question Answering & Visualization") as app:
     gr.Markdown("# CSV Question Answering & Visualization")
     gr.Markdown("Upload a CSV file, ask questions about it, and visualize the data.")
     
-    # File upload section
     with gr.Row():
         with gr.Column():
             file_input = gr.File(label="Upload CSV File")
@@ -395,7 +341,6 @@ with gr.Blocks(title="CSV Question Answering & Visualization") as app:
         preview_output = gr.HTML(label="Data Preview")
         summary_output = gr.Markdown(label="Data Summary")
     
-    # Question answering section
     gr.Markdown("## Ask Questions About Your Data")
     with gr.Row():
         question_input = gr.Textbox(label="Question", placeholder="Ask something about the data...")
@@ -405,7 +350,6 @@ with gr.Blocks(title="CSV Question Answering & Visualization") as app:
         answer_output = gr.Markdown(label="Answer")
         question_plot = gr.Plot(label="Visualization")
     
-    # Visualization section
     gr.Markdown("## Custom Visualization")
     with gr.Row():
         chart_type = gr.Dropdown(
@@ -423,7 +367,6 @@ with gr.Blocks(title="CSV Question Answering & Visualization") as app:
     
     custom_plot = gr.Plot(label="Custom Visualization")
     
-    # Set up event handlers
     file_input.upload(
         fn=upload_file,
         inputs=[file_input],
@@ -454,6 +397,5 @@ with gr.Blocks(title="CSV Question Answering & Visualization") as app:
         api_name="create_visualization"
     )
 
-# Launch the app
 if __name__ == "__main__":
     app.launch(share=True)
